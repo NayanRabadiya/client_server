@@ -1,0 +1,9 @@
+conda activate stones_river
+ conda deactivate
+
+py -m venv venv
+.\venv\Scripts\Activate
+deactivate
+pip install -r requirements.txt
+
+python gameEngine.py --mode aivai --circle random --square student --time 5
