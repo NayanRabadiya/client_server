@@ -74,7 +74,7 @@ def distance_to_goal(x, y, player, rows, cols, score_cols):
     # Manhattan distance to nearest scoring cell
     return min(abs(y - goal_y) + abs(x - col) for col in score_cols)
 
-def f1(board: List[List[Any]],player,row,col,score_cols: List[int]):
+def goal_score(board: List[List[Any]],player,row,col,score_cols: List[int]):
     #function to check if we are at our goal
     if player=="circle":
         scoreRow=bottom_score_row(row)
