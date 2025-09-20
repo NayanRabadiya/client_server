@@ -74,6 +74,59 @@ def distance_to_goal(x, y, player, rows, cols, score_cols):
     # Manhattan distance to nearest scoring cell
     return min(abs(y - goal_y) + abs(x - col) for col in score_cols)
 
+def f1(board: List[List[Any]],player,row,col,score_cols: List[int]):
+    #function to check if we are at our goal
+    if player=="circle":
+        scoreRow=bottom_score_row(row)
+    else:
+        scoreRow=top_score_row()
+    score = 0
+    
+    for x in score_cols:
+        piece = board[scoreRow][x]
+        if piece and piece.owner == player and piece.side == "river":
+            score += 0.5  # fixed bonus
+        elif piece and piece.owner == player and piece.side == "stone":
+            score+=1
+    return score
+def f4(board: List[List[Any]], player, row, col, score_cols: List[Any]):
+    # Manhattan distance between my pieces and the nearest EMPTY goal cell
+    score = 0
+    if player == "circle":
+        scoreRow = bottom_score_row(row)
+    else:
+        scoreRow = top_score_row()
+
+    emptyGoals = [(scoreRow, gx) for gx in score_cols if board[scoreRow][gx] is None]
+
+    for i in range(row):
+        for j in range(col):
+            piece = board[i][j]
+            if piece and piece.owner == player and emptyGoals:
+                # Manhattan distance to the closest EMPTY goal
+                dists = [abs(i - gr) + abs(j - gc) for gr, gc in emptyGoals]
+                score += min(dists)
+    return score
+
+def f5(board: List[List[Any]], player, row, col):
+    # Number of my pieces adjacent to a river
+    score = 0
+
+    for i in range(row):
+        for j in range(col):
+            piece = board[i][j]
+            if piece and piece.owner == player:
+                neighbour = False
+                for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                    ni, nj = i + dy, j + dx
+                    if 0 <= ni < row and 0 <= nj < col:
+                        neighbor = board[ni][nj]
+                        if neighbor and neighbor.side == "river":
+                            neighbour = True
+                            break
+                if neighbour:
+                    score += 1
+    return score
 
 def in_goal_side_rows(
     fx,
