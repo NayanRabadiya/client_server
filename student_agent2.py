@@ -33,7 +33,27 @@ def load_weights(file_path="weights.json"):
         weights = json.load(f)
     return weights
 
+def game_over(board,rows,score_cols):
+    row1 = top_score_row()
+    row2 = bottom_score_row(rows)
+    cnt1=0
+    cnt2 = 0
+    for col in score_cols:
+        piece1 =  board[row1][col]
+        if piece1 is not None and piece1.side == "stone":
+            cnt1+=1
+        
+        piece2 = board[row2][col]
+        if piece2 is not None and piece2.side == "stone":
+            cnt2+=1
+    
+    if cnt1==4 or cnt2 ==4:
+        return True
 
+    return False
+    
+    
+    
 # ==================== GAME UTILITIES ====================
 # Essential utility functions for game state analysis
 def eval_hardcode(board, player, rows, cols, score_cols):
@@ -717,9 +737,13 @@ def generate_all_moves(board, player, rows, cols, score_cols):
     moves_with_to = moves_with_to[:5]
 
     moves = river_moves + moves_with_to
-    # moves = moves[:10]
     
+    print("all moves")
+    for move in moves:
+        print(move)
+    # moves = moves[:10]
     return moves
+
 def count_all_moves(board, player, rows, cols, score_cols):
     moves = []
     moves.extend(generate_river_moves(board, player, rows, cols, score_cols))
@@ -740,8 +764,6 @@ def count_all_moves(board, player, rows, cols, score_cols):
     moves = river_moves + moves_with_to
 
     return len(moves)
-
-
 
 # ==================== BOARD EVALUATION ====================
 
@@ -811,7 +833,6 @@ def eval_piece_near_river(board: List[List[Any]], player, row, col):
                 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
                     nj, ni = j + dx, i + dy
                     if in_bounds(nj, ni, row, col):
-                    # if 0<=ni < row and 0<= nj < col:
                         neighbor = board[ni][nj]
                         if neighbor and neighbor.side == "river":
                             neighbour = True
@@ -836,6 +857,10 @@ def eval_river_cnt(board, player, rows, cols, score_cols):
                 score += 1
     return score
 
+def update_weights(weights, features, delta, alpha=0.05):
+    for k in features:
+        weights[k] += alpha * delta * features[k]
+    return weights
 
 def evaluate_simple(board, player, rows, cols, score_cols):
     """
@@ -1185,143 +1210,150 @@ def simulate_move(
 #     return score
 
 
-def minimax_move(
-    board: List[List[Any]],
-    player: str,
-    rows: int,
-    cols: int,
-    score_cols: List[int],
-) -> Dict[str, Any]:
-    maxVal = -float("inf")
-    maxMove = None
+def update_weights(curr_features: dict, backed_features: dict, learn_rate: float = 0.02, weights_file="weights_learning.json"):
+    """
+    Update evaluation weights based on difference between current features and backed-up features.
+
+    Args:
+        curr_features: dict of feature_name -> current feature values
+        backed_features: dict of feature_name -> backed-up feature values
+        alpha: learning rate
+        weights_file: file storing the weights
+    """
+
+    # Load current weights
+    weights = load_weights(weights_file)
+
+    # Update weights
+    for k in curr_features:
+        delta = backed_features[k] - curr_features[k]
+        weights[k] += learn_rate * delta
+
+    # Save updated weights
+    with open(weights_file, "w") as f:
+        json.dump(weights, f, indent=2)
+
+    return weights
+
+def get_features(board, player, rows, cols, score_cols):
+    """
+    Extract feature values from the board for a given player.
+
+    Returns a dictionary of features without applying weights.
+    """
     opponent = get_opponent(player)
 
+    features = {
+        "stone_goal": eval_stone_in_goal(board, player, rows, cols, score_cols),
+        "opp_stone_goal": eval_stone_in_goal(board, opponent, rows, cols, score_cols),
+        "river_goal": eval_river_in_goal(board, player, rows, cols, score_cols),
+        "opp_river_goal": eval_river_in_goal(board, opponent, rows, cols, score_cols),
+        "manh_dist": eval_manhattan_dist(board, player, rows, cols, score_cols),
+        "opp_manh_dist": eval_manhattan_dist(board, opponent, rows, cols, score_cols),
+        "near_river": eval_piece_near_river(board, player, rows, cols),
+        "opp_near_river": eval_piece_near_river(board, opponent, rows, cols),
+        "move_count": eval_no_of_moves(board, player, rows, cols, score_cols),
+        "opp_move_count": eval_no_of_moves(board, opponent, rows, cols, score_cols),
+    }
+
+    return features
+
+def minimax_move(board, player, rows, cols, score_cols, depth=2):
+    maxVal = -float("inf")
+    maxMove = None
+    bestFeatures = None
+    opponent = get_opponent(player)
+    curr_features = get_features(board, player, rows, cols, score_cols)
     moves = generate_all_moves(board, player, rows, cols, score_cols)
-    print(f"Minimax for {player}, evaluating {len(moves)} moves")
+
     for move in moves:
-        success, result = simulate_move(board, move, player, rows, cols, score_cols)
+        success, child_board = simulate_move(board, move, player, rows, cols, score_cols)
         if success:
-            child_board = result
-            childVal = minValue(
+            childVal, childFeat = minValue(
                 child_board,
-                opponent,  # Next player (minimizing)
-                player,  # Original player (for evaluation)
+                opponent,          # Next player (minimizing)
+                player,            # Original player (for evaluation)
                 rows,
                 cols,
                 score_cols,
                 -float("inf"),
                 float("inf"),
-                2,
+                depth,
             )
-            # print(f"Move {move} -> Score: {childVal}")
-
             if childVal > maxVal:
                 maxVal = childVal
                 maxMove = move
-                # print(f"New best: {move} with score {maxVal}")
+                bestFeatures = childFeat
         else:
-            print(f"Move failed: {move}, Error: {result}")
-
-    # print(f"Selected: {maxMove} with score {maxVal}")
+            print(f"Move failed: {move}")
+    
+    update_weights(curr_features,bestFeatures,0.01,"weights_learning.json")
+    # Return move AND the backed-up features
     return maxMove
 
 
-def minValue(
-    board: List[List[Any]],
-    current_player: str,  # Player whose turn it is (minimizing)
-    original_player: str,  # Player we're optimizing for
-    rows: int,
-    cols: int,
-    score_cols: List[int],
-    alpha: float,
-    beta: float,
-    ply: int,
-) -> float:
-    if ply == 0:
-        return evaluate_simple(board, original_player, rows, cols, score_cols)
+def minValue(board, current_player, original_player, rows, cols, score_cols, alpha, beta, ply):
+    if ply == 0 or game_over(board,rows,score_cols):
+        features = get_features(board, original_player, rows, cols, score_cols)
+        value = sum(load_weights("weights.json")[k] * features[k] for k in features)
+        return value, features
 
-    # GENERATE moves for the CURRENT player (minimizing)
     moves = generate_all_moves(board, current_player, rows, cols, score_cols)
-
-    if not moves:  # No moves available
-        return evaluate_simple(board, original_player, rows, cols, score_cols)
+    if not moves:
+        features = get_features(board, original_player, rows, cols, score_cols)
+        value = sum(load_weights("weights.json")[k] * features[k] for k in features)
+        return value, features
 
     minVal = float("inf")
+    minFeatures = None
     opponent = get_opponent(current_player)
 
     for move in moves:
-        success, child_board = simulate_move(
-            board, move, current_player, rows, cols, score_cols
-        )
+        success, child_board = simulate_move(board, move, current_player, rows, cols, score_cols)
         if success:
-            childVal = maxValue(
-                child_board,
-                opponent,  # Next player (maximizing)
-                original_player,  # Keep original player
-                rows,
-                cols,
-                score_cols,
-                alpha,
-                beta,
-                ply - 1,
-            )
-            minVal = min(minVal, childVal)
+            childVal, childFeat = maxValue(child_board, opponent, original_player, rows, cols, score_cols, alpha, beta, ply - 1)
+            if childVal < minVal:
+                minVal = childVal
+                minFeatures = childFeat
             beta = min(beta, childVal)
             if beta <= alpha:
                 break
         else:
             print(f"Move failed in minValue: {move}")
 
-    return minVal
+    return minVal, minFeatures
 
 
-def maxValue(
-    board: List[List[Any]],
-    current_player: str,  # Player whose turn it is (maximizing)
-    original_player: str,  # Player we're optimizing for
-    rows: int,
-    cols: int,
-    score_cols: List[int],
-    alpha: float,
-    beta: float,
-    ply: int,
-) -> float:
-    if ply == 0:
-        return evaluate_simple(board, original_player, rows, cols, score_cols)
+def maxValue(board, current_player, original_player, rows, cols, score_cols, alpha, beta, ply):
+    if ply == 0 or game_over(board,rows,score_cols):
+        features = get_features(board, original_player, rows, cols, score_cols)
+        value = sum(load_weights("weights.json")[k] * features[k] for k in features)
+        return value, features
 
-    # GENERATE moves for the CURRENT player (maximizing)
     moves = generate_all_moves(board, current_player, rows, cols, score_cols)
-
-    if not moves:  # No moves available
-        return evaluate_simple(board, original_player, rows, cols, score_cols)
+    if not moves:
+        features = get_features(board, original_player, rows, cols, score_cols)
+        value = sum(load_weights("weights.json")[k] * features[k] for k in features)
+        return value, features
 
     maxVal = -float("inf")
+    maxFeatures = None
     opponent = get_opponent(current_player)
 
     for move in moves:
-        success, child_board = simulate_move(
-            board, move, current_player, rows, cols, score_cols
-        )
+        success, child_board = simulate_move(board, move, current_player, rows, cols, score_cols)
         if success:
-            childVal = minValue(
-                child_board,
-                opponent,  # Next player (minimizing)
-                original_player,  # Keep original player
-                rows,
-                cols,
-                score_cols,
-                alpha,
-                beta,
-                ply,
-            )
-            maxVal = max(maxVal, childVal)
+            childVal, childFeat = minValue(child_board, opponent, original_player, rows, cols, score_cols, alpha, beta, ply)
+            if childVal > maxVal:
+                maxVal = childVal
+                maxFeatures = childFeat
             alpha = max(alpha, childVal)
             if alpha >= beta:
                 break
         else:
             print(f"Move failed in maxValue: {move}")
 
-    return maxVal
+    return maxVal, maxFeatures
 
 # ==================== BASE AGENT CLASS ====================
 
@@ -1355,7 +1387,7 @@ class BaseAgent(ABC):
 
 # ==================== STUDENT AGENT IMPLEMENTATION ====================
 
-class StudentAgent(BaseAgent):
+class StudentAgent2(BaseAgent):
     """
     Student Agent Implementation
     
@@ -1388,8 +1420,10 @@ class StudentAgent(BaseAgent):
         my_move = minimax_move(board, self.player, rows, cols, score_cols)
 
         if not my_move:
+            print("none move")
             return None
 
+        print("my_move",my_move)
         # TODO: Replace random selection with your AI algorithm
         return my_move
 
@@ -1408,7 +1442,7 @@ def test_student_agent():
         score_cols = score_cols_for(cols)
         board = default_start_board(rows, cols)
         
-        agent = StudentAgent("circle")
+        agent = StudentAgent2("circle")
         move = agent.choose(board, rows, cols, score_cols,1.0,1.0)
         
         if move:
@@ -1417,7 +1451,7 @@ def test_student_agent():
             print("✗ Agent returned no move")
     
     except ImportError:
-        agent = StudentAgent("circle")
+        agent = StudentAgent2("circle")
         print("✓ StudentAgent created successfully")
 
 if __name__ == "__main__":

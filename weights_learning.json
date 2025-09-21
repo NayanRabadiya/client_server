@@ -1,0 +1,12 @@
+{
+  "stone_goal": 200.0,
+  "opp_stone_goal": -100.0,
+  "river_goal": 150.01,
+  "opp_river_goal": -74.55999999999995,
+  "manh_dist": -50.809999999999974,
+  "opp_manh_dist": 6.290000000000006,
+  "near_river": 5.280000000000002,
+  "opp_near_river": -2.2100000000000013,
+  "move_count": 8.910000000000013,
+  "opp_move_count": 10.34000000000001
+}

@@ -3,7 +3,7 @@
   "opp_stone_goal": -100,
   "river_goal": 150,
   "opp_river_goal": -75,
-  "manh_dist": -10,
+  "manh_dist": -50,
   "opp_manh_dist": 5,
   "near_river": 5,
   "opp_near_river": -2.5,
