@@ -570,7 +570,7 @@ except ImportError:
 try:
     from student_agent2 import StudentAgent2
 except ImportError:
-    print("Warning: student_agent.py not found. Creating placeholder StudentAgent.")
+    print("Warning: student_agent2.py not found. Creating placeholder StudentAgent.")
     
     class StudentAgent2(BaseAgent):
         """Placeholder StudentAgent2 - implement in student_agent2.py"""

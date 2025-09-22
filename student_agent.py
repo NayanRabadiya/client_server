@@ -21,6 +21,20 @@ from typing import List, Dict, Any, Optional, Tuple
 from abc import ABC, abstractmethod
 import json
 
+
+class Piece:
+    def __init__(self, owner:str, side:str="stone", orientation:Optional[str]=None):
+        self.owner = owner
+        self.side = side
+        self.orientation = orientation if orientation else "horizontal"
+    def copy(self): return Piece(self.owner, self.side, self.orientation)
+    def to_dict(self): return {"owner":self.owner,"side":self.side,"orientation":self.orientation}
+    @staticmethod
+    def from_dict(d:Optional[Dict[str,Any]]):
+        if d is None: return None
+        return Piece(d["owner"], d.get("side","stone"), d.get("orientation","horizontal"))
+
+
 # ==================== GAME UTILITIES ====================
 # Essential utility functions for game state analysis
 
@@ -123,9 +137,9 @@ def score_move(move, board, player, rows, cols, score_cols):
     score = 0
 
     if move["action"] == "move":
-
         score -= distance_to_goal(fx, fy, player, rows, cols, score_cols)
-        if is_own_score_cell(fx, fy, player, rows, cols, score_cols):
+        sx,sy = move["from"]
+        if is_own_score_cell(fx, fy, player, rows, cols, score_cols) and not is_own_score_cell(sx,sy,player,rows,cols,score_cols):
             score += 50
 
     # 4. For pushes: increase opponent distance from goal
@@ -143,22 +157,39 @@ def score_move(move, board, player, rows, cols, score_cols):
 def score_flow_move(move, board, player, rows, cols, score_cols):
     x, y = move["from"]
     piece = board[y][x]
-
+    score =0
+    
     # Save original state
     original_side = piece.side
     original_orientation = getattr(piece, "orientation", None)
+    
+    
 
     # Temporarily apply the move
     if move["action"] == "flip":
-        # Flip stone → river or river → stone
+        if is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="river" :
+            score+=100
+        elif is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="stone":
+            score-=10
         piece.side = "river" if piece.side == "stone" else "stone"
+        
     elif move["action"] == "rotate":
-        piece.orientation = (
-            "vertical" if original_orientation == "horizontal" else "horizontal"
-        )
+        piece.orientation = "vertical" if original_orientation == "horizontal" else "horizontal"
 
-    # Calculate flow from this piece
-    flow_cells = agent_river_flow(board, x, y, x, y, player, rows, cols, score_cols)
+    # Determine if this move is a river push scenario
+    river_push = move["action"] == "push" and getattr(piece, "side", "stone") == "river"
+
+    # Compute flow destinations
+    flow_cells = get_river_flow_destinations(
+        board,
+        x, y,               # starting river cell
+        x, y,               # source position (self)
+        player,
+        rows,
+        cols,
+        score_cols,
+        river_push=river_push
+    )
 
     # Only consider safe cells (not in opponent score)
     safe_flow = [
@@ -167,23 +198,18 @@ def score_flow_move(move, board, player, rows, cols, score_cols):
         if not is_opponent_score_cell(fx, fy, player, rows, cols, score_cols)
     ]
 
-    # Score = number of safe flow cells
-    score = len(safe_flow)
+    # Base score = number of safe flow cells
+    score += len(safe_flow)
 
-    # Optional bonuses
-    if any(
-        is_own_score_cell(fx, fy, player, rows, cols, score_cols)
-        for fx, fy in safe_flow
-    ):
-        score += 10  # directly reaches goal
-    if (
-        move["action"] == "flip"
-        and piece.side == "river"
-        and has_adjacent_river(board, x, y, rows, cols)
-    ):
-        score += 2  # connects to existing rivers
+    # Bonus if flow reaches own scoring area
+    if any(is_own_score_cell(fx, fy, player, rows, cols, score_cols) for fx, fy in safe_flow):
+        score += 5
 
-    # Revert the piece to original state
+    # Bonus for connecting to existing rivers
+    if move["action"] in ("flip", "rotate") and piece.side == "river" and has_adjacent_river(board, x, y, rows, cols):
+        score += 2
+
+    # Revert piece to original state
     piece.side = original_side
     piece.orientation = original_orientation
 
@@ -236,63 +262,10 @@ def get_opponent(player: str) -> str:
 
 # ==================== generate moves ======================
 
-def agent_compute_valid_moves(board, sx: int, sy: int, player: str, rows: int, cols: int, score_cols: List[int]) -> Dict[str, Any]:
-    """
-    Compute all valid moves for a piece at position (sx, sy).
-    
-    Returns:
-        Dictionary with 'moves' (set of coordinates) and 'pushes' (list of tuples)
-    """
-    if not in_bounds(sx, sy, rows, cols):
-        return {'moves': set(), 'pushes': []}
-        
-    piece = board[sy][sx]
-    if piece is None or piece.owner != player:
-        return {'moves': set(), 'pushes': []}
-    
-    moves = set()
-    pushes = []
-    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-    
-    for dx, dy in directions:
-        tx, ty = sx + dx, sy + dy
-        if not in_bounds(tx, ty, rows, cols):
-            continue
-            
-        # Block moving into opponent score cell
-        if is_opponent_score_cell(tx, ty, player, rows, cols, score_cols):
-            continue
-            
-        target = board[ty][tx]
-        
-        if target is None:
-            # Empty cell - direct move
-            moves.add((tx, ty))
-        elif getattr(target, "side", "stone") == "river":
-            # River - compute flow destinations
-            flow = agent_river_flow(board, tx, ty, sx, sy, player, rows, cols, score_cols)
-            for dest in flow:
-                moves.add(dest)
-        else:
-            # Occupied by stone - check push possibility
-            if getattr(piece, "side", "stone") == "stone":
-                # Stone pushing stone
-                px, py = tx + dx, ty + dy
-                if (in_bounds(px, py, rows, cols) and 
-                    board[py][px] is None and 
-                    not is_opponent_score_cell(px, py, player, rows, cols, score_cols)):
-                    pushes.append(((tx, ty), (px, py)))
-            else:
-                # River pushing - compute flow for pushed piece
-                flow = agent_river_flow(board, tx, ty, sx, sy, player, rows, cols, score_cols, river_push=True)
-                for dest in flow:
-                    if not is_opponent_score_cell(dest[0], dest[1], player, rows, cols, score_cols):
-                        pushes.append(((tx, ty), dest))
-    
-    return {'moves': moves, 'pushes': pushes}
 
-def agent_river_flow(
-    board,
+
+def get_river_flow_destinations(
+    board: List[List[Optional["Piece"]]],
     rx: int,
     ry: int,
     sx: int,
@@ -301,86 +274,96 @@ def agent_river_flow(
     rows: int,
     cols: int,
     score_cols: List[int],
+    river_push: bool = False
 ) -> List[Tuple[int, int]]:
     """
-    Simulate river flow from a given entry point (rx, ry). Correctly handles
-    moving along rivers and switching directions at river intersections.
+    Compute all possible destinations for a piece entering a river.
+    Correctly handles normal river flow and river pushes.
 
     Args:
         board: Current board state
-        rx, ry: River entry point
-        sx, sy: Source position (the piece that is moving; its own cell is ignored as an obstacle)
+        rx, ry: River entry coordinates
+        sx, sy: Source piece coordinates (ignored as obstacle)
         player: Current player
         rows, cols: Board dimensions
-        score_cols: Scoring column indices
+        score_cols: List of scoring columns
+        river_push: True if a river piece is pushing a stone
 
     Returns:
-        List of unique (x, y) coordinates where the piece can end up via river flow.
+        List of unique (x, y) coordinates where the piece can end up
     """
-    destinations = []
+    from collections import deque
+
+    destinations = set()
     visited = set()
-    queue = [(rx, ry)]  # Old version: Use a list
+    queue = deque([(rx, ry)])
 
     while queue:
-        x, y = queue.pop(0)  # Old version: pop from the front (slow for large lists)
+        x, y = queue.popleft()
         if (x, y) in visited or not in_bounds(x, y, rows, cols):
             continue
         visited.add((x, y))
 
         cell = board[y][x]
-        if cell is None:
-            if not is_opponent_score_cell(x, y, player, rows, cols, score_cols):
-                destinations.append((x, y))
+
+        # In river-push, allow BFS even if starting cell is a stone
+        if river_push and (x, y) == (rx, ry):
+            is_river = True
+        else:
+            is_river = cell is not None and getattr(cell, "side", None) == "river"
+
+        if not is_river:
+            # Empty cell: valid destination unless it's opponent's scoring area
+            if cell is None and not is_opponent_score_cell(x, y, player, rows, cols, score_cols):
+                destinations.add((x, y))
             continue
 
-        if cell.side != "river":
-            continue
-
-        # River flow directions
-        dirs = (
-            [(1, 0), (-1, 0)] if cell.orientation == "horizontal" else [(0, 1), (0, -1)]
-        )
+        # Determine flow directions based on orientation
+        orientation = getattr(cell, "orientation", "horizontal")
+        dirs = [(1, 0), (-1, 0)] if orientation == "horizontal" else [(0, 1), (0, -1)]
 
         for dx, dy in dirs:
             nx, ny = x + dx, y + dy
             while in_bounds(nx, ny, rows, cols):
+                # Block opponent scoring area
                 if is_opponent_score_cell(nx, ny, player, rows, cols, score_cols):
                     break
 
+                # Skip source cell (for push) so stone can flow
+                if (nx, ny) == (sx, sy):
+                    nx += dx
+                    ny += dy
+                    continue
+
                 next_cell = board[ny][nx]
+
                 if next_cell is None:
-                    destinations.append((nx, ny))
+                    destinations.add((nx, ny))
                     nx += dx
                     ny += dy
                     continue
 
-                if nx == sx and ny == sy:
-                    nx += dx
-                    ny += dy
-                    continue
+                if getattr(next_cell, "side", None) == "river":
+                    if (nx, ny) not in visited:
+                        queue.append((nx, ny))
+                    break  # stop current direction; BFS will continue from river
+                break  # blocked by stone
 
-                if next_cell.side == "river":
-                    queue.append((nx, ny))
-                    break
-                break
+    return list(destinations)
 
-    # Remove duplicates
-    unique_destinations = []
-    seen = set()
-    for d in destinations:
-        if d not in seen:
-            seen.add(d)
-            unique_destinations.append(d)
-
-    return unique_destinations
-
-
-def generate_1_step_moves(board, player, rows, cols, score_cols):
+def generate_all_moves(
+    board: List[List[Optional["Piece"]]],
+    player: str,
+    rows: int,
+    cols: int,
+    score_cols: List[int]
+) -> List[Dict[str, Any]]:
     """
-    Generate simple 1-step moves for player's stones.
+    Generate all valid moves for the current player on the board.
+    Uses compute_valid_targets to ensure only legal moves/pushes.
+    Supports move, push, flip, and rotate actions.
     """
     moves = []
-    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
 
     for y in range(rows):
         for x in range(cols):
@@ -388,357 +371,94 @@ def generate_1_step_moves(board, player, rows, cols, score_cols):
             if not piece or piece.owner != player:
                 continue
 
-            for dx, dy in directions:
-                nx, ny = x + dx, y + dy
-                if not in_bounds(nx, ny, rows, cols):
-                    continue
-                if is_opponent_score_cell(nx, ny, player, rows, cols, score_cols):
-                    continue
-                if board[ny][nx] is None:
-                    moves.append({"action": "move", "from": [x, y], "to": [nx, ny]})
+            # ------------------- Compute valid moves & pushes -------------------
+            valid_info = compute_valid_targets(board, x, y, player, rows, cols, score_cols)
 
-    return moves
+            # Add normal moves
+            for to in valid_info['moves']:
+                moves.append({
+                    "action": "move",
+                    "from": [x, y],
+                    "to": list(to)
+                })
 
+            # Add valid pushes (with opponent-score restriction)
+            for from_cell, pushed_cell in valid_info['pushes']:
+                px, py = pushed_cell
+                target_piece = board[from_cell[1]][from_cell[0]] if in_bounds(from_cell[0], from_cell[1], rows, cols) else None
 
-def generate_stone_pushes(board, player, rows, cols, score_cols):
-    """
-    Generate push moves where a stone pushes an adjacent opponent piece.
-    """
-    moves = []
-    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-
-    for y in range(rows):
-        for x in range(cols):
-            piece = board[y][x]
-            if not piece or piece.owner != player or piece.side != "stone":
-                continue
-
-            for dx, dy in directions:
-                nx, ny = x + dx, y + dy
-                if not in_bounds(nx, ny, rows, cols):
-                    continue
-                target = board[ny][nx]
-                if not target or target.owner == player:
+                # Only skip if the pushed piece would land in *opponent's* scoring area
+                if target_piece and is_opponent_score_cell(px, py, target_piece.owner, rows, cols, score_cols):
                     continue
 
-                px, py = nx + dx, ny + dy
-                if not in_bounds(px, py, rows, cols):
-                    continue
-                if board[py][px] is not None:
-                    continue
-                if is_opponent_score_cell(nx, ny, player, rows, cols, score_cols):
-                    continue
-                if is_own_score_cell(px, py, player, rows, cols, score_cols):
-                    continue
+                moves.append({
+                    "action": "push",
+                    "from": [x, y],
+                    "to": list(from_cell),
+                    "pushed_to": list(pushed_cell)
+                })
 
-                moves.append(
-                    {
-                        "action": "push",
+            # ------------------- Flips -------------------
+            if piece.side == "stone":
+                # Flip stone -> river
+                for ori in ("horizontal", "vertical"):
+                    moves.append({
+                        "action": "flip",
                         "from": [x, y],
-                        "to": [nx, ny],
-                        "pushed_to": [px, py],
-                    }
-                )
+                        "orientation": ori
+                    })
+            else:
+                # Flip river -> stone
+                moves.append({
+                    "action": "flip",
+                    "from": [x, y]
+                })
 
-    return moves
+                # Rotate river piece
+                new_ori = "vertical" if piece.orientation == "horizontal" else "horizontal"
+                moves.append({
+                    "action": "rotate",
+                    "from": [x, y],
+                    "orientation": new_ori
+                })
 
+    # ------------------- Deduplicate moves -------------------
+    seen = set()
+    unique_moves = []
 
-def generate_stone_flips(board, player, rows, cols, score_cols):
-    """
-    Generate flips of stones into rivers.
-    """
-    moves = []
-    for y in range(rows):
-        for x in range(cols):
-            piece = board[y][x]
-            if not piece or piece.owner != player or piece.side != "stone":
-                continue
+    for m in moves:
+        key = (
+            m["from"][0],
+            m["from"][1],
+            tuple(m["to"]) if m.get("to") else None,
+            tuple(m["pushed_to"]) if m.get("pushed_to") else None,
+            m.get("orientation", None),
+            m["action"]
+        )
+        if key not in seen:
+            seen.add(key)
+            unique_moves.append(m)
 
-            # Save the original state of the piece
-            original_side = piece.side
-            original_orientation = getattr(piece, "orientation", None)
-
-            for orientation in ("horizontal", "vertical"):
-                # Temporarily change the piece to a river
-                piece.side = "river"
-                piece.orientation = orientation
-
-                # Use the efficient flow calculator
-                flow = agent_river_flow(
-                    board, x, y, x, y, player, rows, cols, score_cols
-                )
-
-                # Check if the flow is safe (doesn't go into opponent score)
-                if not any(
-                    is_opponent_score_cell(fx, fy, player, rows, cols, score_cols)
-                    for fx, fy in flow
-                ):
-                    moves.append(
-                        {"action": "flip", "from": [x, y], "orientation": orientation}
-                    )
-
-            # CRITICAL: Revert the piece back to its original state immediately after the loop
-            piece.side = original_side
-            piece.orientation = original_orientation
-
-    return moves
+    return unique_moves
 
 
-def generate_river_flips(board, player, rows, cols, score_cols):
-    """
-    Generate flips of river back to stone.
-    """
-    moves = []
-    for y in range(rows):
-        for x in range(cols):
-            piece = board[y][x]
-            if not piece or piece.owner != player or piece.side != "river":
-                continue
-            moves.append({"action": "flip", "from": [x, y]})
-    return moves
-
-
-def generate_river_rotates(board, player, rows, cols, score_cols):
-    """
-    Generate rotations of river orientation.
-    """
-    moves = []
-    for y in range(rows):
-        for x in range(cols):
-            piece = board[y][x]
-            if not piece or piece.owner != player or piece.side != "river":
-                continue
-
-            # Save the original orientation
-            original_orientation = piece.orientation
-
-            # Calculate the new orientation
-            new_orientation = (
-                "vertical" if original_orientation == "horizontal" else "horizontal"
-            )
-
-            # Temporarily change the piece's orientation
-            piece.orientation = new_orientation
-
-            # Use the efficient flow calculator
-            flow = agent_river_flow(board, x, y, x, y, player, rows, cols, score_cols)
-
-            # Check if the new flow is safe
-            if not any(
-                is_opponent_score_cell(dx, dy, player, rows, cols, score_cols)
-                for dx, dy in flow
-            ):
-                moves.append({"action": "rotate", "from": [x, y]})
-
-            # CRITICAL: Revert the piece back to its original orientation
-            piece.orientation = original_orientation
-
-    return moves
-
-
-def generate_stone_in_river_flows(board, player, rows, cols, score_cols):
-    """
-    Generate moves where a stone moves onto a river and then flows.
-    """
-    moves = []
-    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]  # 1-step directions
-
-    for y in range(rows):
-        for x in range(cols):
-            piece = board[y][x]
-            if not piece or piece.owner != player or piece.side != "stone":
-                continue
-
-            # First, check all 4 adjacent cells for a river
-            for dx, dy in directions:
-                nx, ny = x + dx, y + dy
-                if not in_bounds(nx, ny, rows, cols):
-                    continue
-
-                # The adjacent cell must contain a river to step onto
-                adj_cell = board[ny][nx]
-                if not adj_cell or adj_cell.side != "river":
-                    continue  # Skip if not a river
-
-                # Now, calculate flow starting FROM THE RIVER CELL (nx, ny)
-                # The source piece is at (x, y)
-                flow = agent_river_flow(
-                    board, nx, ny, x, y, player, rows, cols, score_cols
-                )
-
-                for fx, fy in flow:
-                    in_goal_band = in_goal_side_rows(
-                        fx, fy, player, rows, cols, score_cols
-                    )
-                    if not is_opponent_score_cell(
-                        fx, fy, player, rows, cols, score_cols
-                    ):
-                        if in_goal_band:
-                            moves.append(
-                                {"action": "move", "from": [x, y], "to": [fx, fy]}
-                            )
-
-    # sort moves based on some function
-    return moves
-
-
-def generate_river_moves(board, player, rows, cols, score_cols):
-    """
-    Generate moves where a river piece moves onto a river and then flows.
-    """
-    moves = []
-    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]  # 1-step directions
-
-    for y in range(rows):
-        for x in range(cols):
-            piece = board[y][x]
-            if not piece or piece.owner != player or piece.side != "river":
-                continue
-
-            # First, check all 4 adjacent cells for a river (any player's river)
-            for dx, dy in directions:
-                nx, ny = x + dx, y + dy
-                if not in_bounds(nx, ny, rows, cols):
-                    continue
-
-                # The adjacent cell must contain a river to step onto
-                adj_cell = board[ny][nx]
-                if not adj_cell or adj_cell.side != "river":
-                    continue  # Skip if not a river
-
-                # Now, calculate flow starting FROM THE ADJACENT RIVER CELL (nx, ny)
-                # The source piece is at (x, y)
-                flow = agent_river_flow(
-                    board, nx, ny, x, y, player, rows, cols, score_cols
-                )
-
-                for fx, fy in flow:
-                    # Check if the flow destination is valid (not in opponent score)
-                    in_goal_band = in_goal_side_rows(
-                        fx, fy, player, rows, cols, score_cols
-                    )
-                    if not is_opponent_score_cell(
-                        fx, fy, player, rows, cols, score_cols
-                    ):
-                        if in_goal_band:
-                            moves.append(
-                                {"action": "move", "from": [x, y], "to": [fx, fy]}
-                            )
-    return moves
-
-
-def generate_river_pushes(board, player, rows, cols, score_cols):
-    """
-    Generate moves where a river piece pushes an adjacent opponent stone along the river flow.
-    The river piece stays in place and flips to stone after pushing.
-    """
-    moves = []
-    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]  # Check all 4 adjacent cells
-
-    for y in range(rows):
-        for x in range(cols):
-            river_piece = board[y][x]
-            # Check if current cell has one of our river pieces
-            if (
-                not river_piece
-                or river_piece.owner != player
-                or river_piece.side != "river"
-            ):
-                continue
-
-            # Check all four adjacent cells for opponent stones to push
-            for dx, dy in directions:
-                stone_x, stone_y = x + dx, y + dy  # Coordinates of adjacent cell
-
-                if not in_bounds(stone_x, stone_y, rows, cols):
-                    continue
-
-                stone = board[stone_y][stone_x]
-                # Verify adjacent cell contains opponent's stone
-                if not stone or stone.owner == player or stone.side != "stone":
-                    continue
-
-                # Calculate all possible flow destinations for the STONE starting from its position
-                # The stone's own position (stone_x, stone_y) is ignored as obstacle
-                flow_destinations = agent_river_flow(
-                    board,
-                    stone_x,
-                    stone_y,
-                    stone_x,
-                    stone_y,
-                    player,
-                    rows,
-                    cols,
-                    score_cols,
-                )
-
-                # Check each possible destination for validity
-                for dest_x, dest_y in flow_destinations:
-                    # Destination must be empty and not in any score area
-                    if (
-                        board[dest_y][dest_x] is None
-                        and not is_opponent_score_cell(
-                            dest_x, dest_y, player, rows, cols, score_cols
-                        )
-                        and not is_own_score_cell(
-                            dest_x, dest_y, player, rows, cols, score_cols
-                        )
-                    ):
-
-                        moves.append(
-                            {
-                                "action": "push",
-                                "from": [x, y],  # River piece position
-                                "to": [stone_x, stone_y],  # Opponent stone position
-                                "pushed_to": [dest_x, dest_y],  # Where stone lands
-                            }
-                        )
-
-    return moves
-
-
-def generate_all_moves(board, player, rows, cols, score_cols):
-    moves = []
-    moves.extend(generate_river_moves(board, player, rows, cols, score_cols))
-    moves.extend(generate_stone_in_river_flows(board, player, rows, cols, score_cols))
-    moves.extend(generate_stone_flips(board, player, rows, cols, score_cols))
-    moves.extend(generate_river_flips(board, player, rows, cols, score_cols))
-    moves.extend(generate_river_rotates(board, player, rows, cols, score_cols))
-    moves.extend(generate_river_pushes(board, player, rows, cols, score_cols))
-    moves.extend(generate_stone_pushes(board, player, rows, cols, score_cols))
-    moves.extend(generate_1_step_moves(board, player, rows, cols, score_cols))
-
+def generate_heuristic_moves(board, player, rows, cols, score_cols):
+    moves = generate_all_moves(board, player, rows, cols, score_cols)
+    
     river_moves = [m for m in moves if m["action"] in ("flip", "rotate")]
     river_moves = sorted(river_moves, key=lambda m: score_flow_move(m, board, player, rows, cols, score_cols), reverse=True)
-    river_moves = river_moves[:5]
+    river_moves = river_moves[:8]
 
     moves_with_to = [m for m in moves if m["action"] in ("push","move")]
     moves_with_to = sorted(moves_with_to,key=lambda m: score_move(m, board, player, rows, cols, score_cols),reverse=True)
-    moves_with_to = moves_with_to[:5]
+    moves_with_to = moves_with_to[:17]
 
     moves = river_moves + moves_with_to
-    # moves = moves[:10]
     
     return moves
+    
 def count_all_moves(board, player, rows, cols, score_cols):
-    moves = []
-    moves.extend(generate_river_moves(board, player, rows, cols, score_cols))
-    moves.extend(generate_stone_in_river_flows(board, player, rows, cols, score_cols))
-    moves.extend(generate_stone_flips(board, player, rows, cols, score_cols))
-    moves.extend(generate_river_flips(board, player, rows, cols, score_cols))
-    moves.extend(generate_river_rotates(board, player, rows, cols, score_cols))
-    moves.extend(generate_river_pushes(board, player, rows, cols, score_cols))
-    moves.extend(generate_stone_pushes(board, player, rows, cols, score_cols))
-    moves.extend(generate_1_step_moves(board, player, rows, cols, score_cols))
-
-    river_moves = [m for m in moves if m["action"] in ("flip", "rotate")]
-    river_moves = sorted(river_moves, key=lambda m: score_flow_move(m, board, player, rows, cols, score_cols), reverse=True)
-
-    moves_with_to = [m for m in moves if "to" in m]
-    moves_with_to = sorted(moves_with_to,key=lambda m: score_move(m, board, player, rows, cols, score_cols),reverse=True)
-
-    moves = river_moves + moves_with_to
-
+    moves = generate_all_moves(board, player, rows, cols, score_cols)
     return len(moves)
 
 
@@ -883,244 +603,239 @@ def evaluate_simple(board, player, rows, cols, score_cols):
     return total
 
 
-# def basic_evaluate_board(
-#     board: List[List[Any]], player: str, rows: int, cols: int, score_cols: List[int]
-# ) -> float:
-#     """
-#     Basic board evaluation function.
 
-#     Returns a score where higher values are better for the given player.
-#     Students can use this as a starting point and improve it.
-#     """
-#     score = 0.0
-#     opponent = get_opponent(player)
-
-#     # Count stones in scoring areas
-#     player_scoring_stones = count_stones_in_scoring_area(
-#         board, player, rows, cols, score_cols
-#     )
-#     opponent_scoring_stones = count_stones_in_scoring_area(
-#         board, opponent, rows, cols, score_cols
-#     )
-
-#     score += player_scoring_stones * 100
-#     score -= opponent_scoring_stones * 100
-
-#     # Count total pieces and positional factors
-#     for y in range(rows):
-#         for x in range(cols):
-#             piece = board[y][x]
-#             if piece and piece.owner == player and piece.side == "stone":
-#                 # Basic positional scoring
-#                 if player == "circle":
-#                     score += (rows - y) * 0.1
-#                 else:
-#                     score += y * 0.1
-
-#     return score
+# ===================== simmulate for minimax
 
 
-def agent_apply_move(
-    board,
+def compute_valid_targets(board:List[List[Optional[Piece]]],
+                          sx:int, sy:int, player:str,
+                          rows:int, cols:int, score_cols:List[int]) -> Dict[str,Any]:
+    if not in_bounds(sx,sy,rows,cols):
+        return {'moves': set(), 'pushes': []}
+    p = board[sy][sx]
+    if p is None or p.owner != player:
+        return {'moves': set(), 'pushes': []}
+    moves=set(); pushes=[]
+    dirs=[(1,0),(-1,0),(0,1),(0,-1)]
+    for dx,dy in dirs:
+        tx,ty = sx+dx, sy+dy
+        if not in_bounds(tx,ty,rows,cols): continue
+        # block entering opponent score cell
+        if is_opponent_score_cell(tx,ty,player,rows,cols,score_cols):
+            continue
+        target = board[ty][tx]
+        if target is None:
+            moves.add((tx,ty))
+        elif target.side == "river":
+            flow = get_river_flow_destinations(board, tx, ty, sx, sy, player, rows, cols, score_cols)
+            for d in flow: moves.add(d)
+        else:
+            # stone occupied
+            if p.side == "stone":
+                px,py = tx+dx, ty+dy
+                if in_bounds(px,py,rows,cols) and board[py][px] is None and not is_opponent_score_cell(px,py,p.owner,rows,cols,score_cols):
+                    pushes.append(((tx,ty),(px,py)))
+            else:
+                pushed_player = target.owner
+                flow = get_river_flow_destinations(board, tx, ty, sx, sy, pushed_player, rows, cols, score_cols, river_push=True)
+                for d in flow:
+                    if not is_opponent_score_cell(d[0],d[1],player,rows,cols,score_cols):
+                        pushes.append(((tx,ty),(d[0],d[1])))
+    return {'moves': moves, 'pushes': pushes}
+
+
+def validate_and_apply_move(
+    board: List[List[Optional["Piece"]]],
     move: Dict[str, Any],
     player: str,
     rows: int,
     cols: int,
-    score_cols: List[int],
+    score_cols: List[int]
 ) -> Tuple[bool, str]:
     """
-    Apply a move to a board copy for simulation purposes.
-
-    Args:
-        board: Board state to modify
-        move: Move dictionary
-        player: Current player
-        rows, cols: Board dimensions
-        score_cols: Scoring column indices
+    Validate and apply a move for the stones & river game.
+    Supports actions: move, push, flip, rotate.
 
     Returns:
-        (success: bool, message: str)
+        Tuple[bool, str]: (success flag, message)
     """
+    # Validate input type
+    if not isinstance(move, dict):
+        return False, "move must be a dict"
+
     action = move.get("action")
 
+    # -------------------
+    # MOVE ACTION
+    # -------------------
     if action == "move":
-        return _apply_move_action(board, move, player, rows, cols, score_cols)
+        fr = move.get("from")
+        to = move.get("to")
+        if not fr or not to:
+            return False, "move needs 'from' and 'to'"
+        fx, fy = int(fr[0]), int(fr[1])
+        tx, ty = int(to[0]), int(to[1])
+
+        if not (in_bounds(fx, fy, rows, cols) and in_bounds(tx, ty, rows, cols)):
+            return False, "out of bounds"
+        if is_opponent_score_cell(tx, ty, player, rows, cols, score_cols):
+            return False, "cannot move into opponent score cell"
+
+        piece = board[fy][fx]
+        if piece is None or piece.owner != player:
+            return False, "invalid piece"
+
+        # Normal move into empty cell
+        if board[ty][tx] is None:
+            board[ty][tx] = piece
+            board[fy][fx] = None
+            return True, "moved"
+
+        # Move with push
+        pushed = move.get("pushed_to")
+        if not pushed:
+            return False, "destination occupied; 'pushed_to' required"
+        ptx, pty = int(pushed[0]), int(pushed[1])
+        dx, dy = tx - fx, ty - fy
+
+        if (ptx, pty) != (tx + dx, ty + dy):
+            return False, "'pushed_to' must be in line with move direction"
+        if not in_bounds(ptx, pty, rows, cols):
+            return False, "pushed_to out of bounds"
+        if is_opponent_score_cell(ptx, pty, player, rows, cols, score_cols):
+            return False, "cannot push into opponent score cell"
+        if board[pty][ptx] is not None:
+            return False, "'pushed_to' not empty"
+
+        # Apply move + push
+        board[pty][ptx] = board[ty][tx]  # pushed piece
+        board[ty][tx] = piece            # mover occupies destination
+        board[fy][fx] = None             # origin cleared
+        return True, "move + push applied"
+
+    # -------------------
+    # PUSH ACTION
+    # -------------------
     elif action == "push":
-        return _apply_push_action(board, move, player, rows, cols, score_cols)
+        fr = move.get("from")
+        to = move.get("to")
+        pushed = move.get("pushed_to")
+        if not fr or not to or not pushed:
+            return False, "push needs 'from', 'to', and 'pushed_to'"
+
+        fx, fy = int(fr[0]), int(fr[1])
+        tx, ty = int(to[0]), int(to[1])
+        px, py = int(pushed[0]), int(pushed[1])
+
+        if not all(in_bounds(x, y, rows, cols) for x, y in [(fx, fy), (tx, ty), (px, py)]):
+            return False, "out of bounds"
+
+        piece = board[fy][fx]
+        target = board[ty][tx]
+        if piece is None or piece.owner != player:
+            return False, "invalid piece"
+        if target is None:
+            return False, "'to' must be occupied"
+        if board[py][px] is not None:
+            return False, "'pushed_to' not empty"
+        if piece.side == "river" and target.side == "river":
+            return False, "rivers cannot push rivers"
+
+        pushed_player = target.owner
+        if is_opponent_score_cell(tx, ty, player, rows, cols, score_cols) or \
+           is_opponent_score_cell(px, py, pushed_player, rows, cols, score_cols):
+            return False, "push would enter opponent score cell"
+
+        # Validate against computed valid pushes
+        valid_info = compute_valid_targets(board, fx, fy, player, rows, cols, score_cols)
+        if ((tx, ty), (px, py)) not in valid_info['pushes']:
+            return False, "push pair invalid"
+
+        # Apply push
+        board[py][px] = board[ty][tx]  # pushed piece
+        board[ty][tx] = piece          # mover occupies target
+        board[fy][fx] = None           # origin cleared
+
+        # If mover was river, convert back to stone
+        if board[ty][tx].side == "river":
+            board[ty][tx].side = "stone"
+            board[ty][tx].orientation = None
+
+        return True, "push applied"
+
+    # -------------------
+    # FLIP ACTION
+    # -------------------
     elif action == "flip":
-        return _apply_flip_action(board, move, player, rows, cols, score_cols)
-    elif action == "rotate":
-        return _apply_rotate_action(board, move, player, rows, cols, score_cols)
+        fr = move.get("from")
+        if not fr:
+            return False, "flip needs 'from'"
+        fx, fy = int(fr[0]), int(fr[1])
+        if not in_bounds(fx, fy, rows, cols):
+            return False, "out of bounds"
+        piece = board[fy][fx]
+        if piece is None or piece.owner != player:
+            return False, "invalid piece"
 
-    return False, "unknown action"
+        # Stone -> River
+        if piece.side == "stone":
+            ori = move.get("orientation")
+            if ori not in ("horizontal", "vertical"):
+                return False, "stone -> river needs valid orientation"
 
+            # Check that resulting flow won't reach opponent score
+            piece.side = "river"
+            piece.orientation = ori
+            flow = get_river_flow_destinations(board, fx, fy, fx, fy, player, rows, cols, score_cols)
+            piece.side = "stone"  # revert temporarily
+            piece.orientation = None
+            for x, y in flow:
+                if is_opponent_score_cell(x, y, player, rows, cols, score_cols):
+                    return False, "flip would allow flow into opponent score"
 
-def _apply_move_action(board, move, player, rows, cols, score_cols):
-    """Apply a move action."""
-    fr = move.get("from")
-    to = move.get("to")
-    if not fr or not to:
-        return False, "bad move format"
+            # Commit flip
+            piece.side = "river"
+            piece.orientation = ori
+            return True, "flipped to river"
 
-    fx, fy = int(fr[0]), int(fr[1])
-    tx, ty = int(to[0]), int(to[1])
-
-    if not in_bounds(fx, fy, rows, cols) or not in_bounds(tx, ty, rows, cols):
-        return False, "out of bounds"
-
-    if is_opponent_score_cell(tx, ty, player, rows, cols, score_cols):
-        return False, "cannot move into opponent score cell"
-
-    piece = board[fy][fx]
-    if piece is None or piece.owner != player:
-        # if piece is None:
-        #     return False, "None piece"
-        # else:
-        #     return False, "owner diff"
-        return False, "invalid piece"
-
-    if board[ty][tx] is None:
-        # Simple move
-        board[ty][tx] = piece
-        board[fy][fx] = None
-        return True, "moved"
-
-    # Move with push
-    pushed_to = move.get("pushed_to")
-    if not pushed_to:
-        return False, "destination occupied; pushed_to required"
-
-    ptx, pty = int(pushed_to[0]), int(pushed_to[1])
-    dx, dy = tx - fx, ty - fy
-
-    if (ptx, pty) != (tx + dx, ty + dy):
-        return False, "invalid pushed_to"
-
-    if not in_bounds(ptx, pty, rows, cols):
-        return False, "pushed_to out of bounds"
-
-    if is_opponent_score_cell(ptx, pty, player, rows, cols, score_cols):
-        return False, "cannot push into opponent score"
-
-    if board[pty][ptx] is not None:
-        return False, "pushed_to not empty"
-
-    board[pty][ptx] = board[ty][tx]
-    board[ty][tx] = piece
-    board[fy][fx] = None
-    return True, "moved with push"
-
-
-def _apply_push_action(board, move, player, rows, cols, score_cols):
-    """Apply a push action."""
-    fr = move.get("from")
-    to = move.get("to")
-    pushed_to = move.get("pushed_to")
-
-    if not fr or not to or not pushed_to:
-        return False, "bad push format"
-
-    fx, fy = int(fr[0]), int(fr[1])
-    tx, ty = int(to[0]), int(to[1])
-    px, py = int(pushed_to[0]), int(pushed_to[1])
-
-    if is_opponent_score_cell(
-        tx, ty, player, rows, cols, score_cols
-    ) or is_opponent_score_cell(px, py, player, rows, cols, score_cols):
-        return False, "push would move into opponent score cell"
-
-    if not (
-        in_bounds(fx, fy, rows, cols)
-        and in_bounds(tx, ty, rows, cols)
-        and in_bounds(px, py, rows, cols)
-    ):
-        return False, "out of bounds"
-
-    piece = board[fy][fx]
-    if piece is None or piece.owner != player:
-        return False, "invalid piece"
-
-    if board[ty][tx] is None:
-        return False, "'to' must be occupied"
-
-    if board[py][px] is not None:
-        return False, "pushed_to not empty"
-
-    board[py][px] = board[ty][tx]
-    board[ty][tx] = board[fy][fx]
-    board[fy][fx] = None
-    return True, "pushed"
-
-
-def _apply_flip_action(board, move, player, rows, cols, score_cols):
-    """Apply a flip action."""
-    fr = move.get("from")
-    if not fr:
-        return False, "bad flip format"
-
-    fx, fy = int(fr[0]), int(fr[1])
-    piece = board[fy][fx]
-
-    if piece is None or piece.owner != player:
-        return False, "invalid piece"
-
-    if piece.side == "stone":
-        # Stone to river
-        orientation = move.get("orientation")
-        if orientation not in ("horizontal", "vertical"):
-            return False, "stone->river needs orientation"
-
-        # Check if new river would allow flow into opponent score
-        board[fy][fx].side = "river"
-        board[fy][fx].orientation = orientation
-        flow = agent_river_flow(board, fx, fy, fx, fy, player, rows, cols, score_cols)
-
-        # Revert for safety check
-        board[fy][fx].side = "stone"
-        board[fy][fx].orientation = None
-
-        for dx, dy in flow:
-            if is_opponent_score_cell(dx, dy, player, rows, cols, score_cols):
-                return False, "flip would allow flow into opponent score cell"
-
-        # Apply flip
-        board[fy][fx].side = "river"
-        board[fy][fx].orientation = orientation
-        return True, "flipped to river"
-    else:
-        # River to stone
-        board[fy][fx].side = "stone"
-        board[fy][fx].orientation = None
+        # River -> Stone
+        piece.side = "stone"
+        piece.orientation = None
         return True, "flipped to stone"
 
+    # -------------------
+    # ROTATE ACTION
+    # -------------------
+    elif action == "rotate":
+        fr = move.get("from")
+        if not fr:
+            return False, "rotate needs 'from'"
+        fx, fy = int(fr[0]), int(fr[1])
+        if not in_bounds(fx, fy, rows, cols):
+            return False, "out of bounds"
+        piece = board[fy][fx]
+        if piece is None or piece.owner != player:
+            return False, "invalid piece"
+        if piece.side != "river":
+            return False, "rotate only on river"
 
-def _apply_rotate_action(board, move, player, rows, cols, score_cols):
-    """Apply a rotate action."""
-    fr = move.get("from")
-    if not fr:
-        return False, "bad rotate format"
+        # Toggle orientation
+        piece.orientation = "horizontal" if piece.orientation == "vertical" else "vertical"
 
-    fx, fy = int(fr[0]), int(fr[1])
-    piece = board[fy][fx]
+        # Check resulting river flow
+        flow = get_river_flow_destinations(board, fx, fy, fx, fy, player, rows, cols, score_cols)
+        for x, y in flow:
+            if is_opponent_score_cell(x, y, player, rows, cols, score_cols):
+                # Revert orientation
+                piece.orientation = "horizontal" if piece.orientation == "vertical" else "vertical"
+                return False, "rotation allows flow into opponent score"
 
-    if piece is None or piece.owner != player or piece.side != "river":
-        return False, "invalid rotate"
+        return True, "rotated"
 
-    # Try rotation
-    old_orientation = piece.orientation
-    piece.orientation = "horizontal" if piece.orientation == "vertical" else "vertical"
-
-    # Check flow safety after rotation
-    flow = agent_river_flow(board, fx, fy, fx, fy, player, rows, cols, score_cols)
-
-    for dx, dy in flow:
-        if is_opponent_score_cell(dx, dy, player, rows, cols, score_cols):
-            # Revert rotation
-            piece.orientation = old_orientation
-            return False, "rotate would allow flow into opponent score cell"
-
-    return True, "rotated"
-
+    # -------------------
+    # UNKNOWN ACTION
+    # -------------------
+    return False, "unknown action"
 
 def simulate_move(
     board: List[List[Any]],
@@ -1138,7 +853,7 @@ def simulate_move(
     """
 
     board_copy = copy.deepcopy(board)
-    success, message = agent_apply_move(
+    success, message = validate_and_apply_move(
         board_copy, move, player, rows, cols, score_cols
     )
 
@@ -1147,42 +862,6 @@ def simulate_move(
     else:
         return False, message
 
-
-# def evaluate(
-#     board: List[List[Any]], player: str, rows: int, cols: int, score_cols: List[int]
-# ):
-#     """
-#     Basic board evaluation function.
-
-#     Returns a score where higher values are better for the given player.
-#     Students can use this as a starting point and improve it.
-#     """
-#     score = 0.0
-#     opponent = get_opponent(player)
-
-#     # Count stones in scoring areas
-#     player_scoring_stones = count_stones_in_scoring_area(
-#         board, player, rows, cols, score_cols
-#     )
-#     opponent_scoring_stones = count_stones_in_scoring_area(
-#         board, opponent, rows, cols, score_cols
-#     )
-
-#     score += player_scoring_stones * 100
-#     score -= opponent_scoring_stones * 100
-
-#     # Count total pieces and positional factors
-#     for y in range(rows):
-#         for x in range(cols):
-#             piece = board[y][x]
-#             if piece and piece.owner == player and piece.side == "stone":
-#                 # Basic positional scoring
-#                 if player == "circle":
-#                     score += y * 1
-#                 else:
-#                     score += rows - y
-
-#     return score
 
 
 def minimax_move(
@@ -1196,7 +875,7 @@ def minimax_move(
     maxMove = None
     opponent = get_opponent(player)
 
-    moves = generate_all_moves(board, player, rows, cols, score_cols)
+    moves = generate_heuristic_moves(board, player, rows, cols, score_cols)
     print(f"Minimax for {player}, evaluating {len(moves)} moves")
     for move in moves:
         success, result = simulate_move(board, move, player, rows, cols, score_cols)
@@ -1211,7 +890,7 @@ def minimax_move(
                 score_cols,
                 -float("inf"),
                 float("inf"),
-                2,
+                1,
             )
             # print(f"Move {move} -> Score: {childVal}")
 
@@ -1241,7 +920,7 @@ def minValue(
         return evaluate_simple(board, original_player, rows, cols, score_cols)
 
     # GENERATE moves for the CURRENT player (minimizing)
-    moves = generate_all_moves(board, current_player, rows, cols, score_cols)
+    moves = generate_heuristic_moves(board, current_player, rows, cols, score_cols)
 
     if not moves:  # No moves available
         return evaluate_simple(board, original_player, rows, cols, score_cols)
@@ -1263,7 +942,7 @@ def minValue(
                 score_cols,
                 alpha,
                 beta,
-                ply - 1,
+                ply,
             )
             minVal = min(minVal, childVal)
             beta = min(beta, childVal)
@@ -1290,7 +969,7 @@ def maxValue(
         return evaluate_simple(board, original_player, rows, cols, score_cols)
 
     # GENERATE moves for the CURRENT player (maximizing)
-    moves = generate_all_moves(board, current_player, rows, cols, score_cols)
+    moves = generate_heuristic_moves(board, current_player, rows, cols, score_cols)
 
     if not moves:  # No moves available
         return evaluate_simple(board, original_player, rows, cols, score_cols)
@@ -1312,7 +991,7 @@ def maxValue(
                 score_cols,
                 alpha,
                 beta,
-                ply,
+                ply-1,
             )
             maxVal = max(maxVal, childVal)
             alpha = max(alpha, childVal)
@@ -1386,9 +1065,14 @@ class StudentAgent(BaseAgent):
             Dictionary representing your chosen move
         """
         my_move = minimax_move(board, self.player, rows, cols, score_cols)
+        print("my_move",my_move)
 
         if not my_move:
             return None
+        # moves = generate_all_moves(board,self.player,rows,cols,score_cols)
+        # print("move_cnt", len(moves))
+        # for move in moves:
+        #     print(move)
 
         # TODO: Replace random selection with your AI algorithm
         return my_move
