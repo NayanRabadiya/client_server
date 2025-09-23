@@ -132,7 +132,7 @@ def in_goal_side_rows(
     if player == "circle":  # suppose Player 1 scores at right
         return fx <= 4
     else:  # Player 2 scores at left
-        return fx >= rows - 5
+        return fx >= rows - 5 
 
 
 def has_adjacent_river(board, x, y, rows, cols):
@@ -157,8 +157,7 @@ def score_move(move, board, player, rows, cols, score_cols):
         sx,sy = move["from"]
         if is_own_score_cell(fx, fy, player, rows, cols, score_cols) and not is_own_score_cell(sx,sy,player,rows,cols,score_cols):
             score += 10
-
-
+        
     # 4. For pushes: increase opponent distance from goal
     opponent = get_opponent(player)
     if move["action"] == "push":
@@ -186,7 +185,7 @@ def score_flow_move(move, board, player, rows, cols, score_cols):
         if is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="river" :
             score+=100
         elif is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="stone":
-            score-=10
+            score+=10
         piece.side = "river" if piece.side == "stone" else "stone"
         
     elif move["action"] == "rotate":
@@ -484,14 +483,22 @@ def generate_heuristic_moves(board, player, rows, cols, score_cols):
     else:
         river_moves = [m for m in moves if m["action"] in ("flip", "rotate")]
         river_moves = sorted(river_moves, key=lambda m: score_flow_move(m, board, player, rows, cols, score_cols), reverse=True)
-        river_moves = river_moves[:6]
+        river_moves = river_moves[:10]
+        weights1 = [score_flow_move(m, board, player, rows, cols, score_cols) for m in river_moves]  
 
         moves_with_to = [m for m in moves if m["action"] in ("push","move")]
         moves_with_to = sorted(moves_with_to,key=lambda m: score_move(m, board, player, rows, cols, score_cols),reverse=True)
-        moves_with_to = moves_with_to[:14]
+        moves_with_to = moves_with_to[:20]
+        weights2 = [score_move(m, board, player, rows, cols, score_cols) for m in moves_with_to] 
 
         filtered_moves = river_moves + moves_with_to
-    
+        weights1.extend(weights2)
+        
+    if random.random() < 0.2 and  filtered_moves:
+        random_move = random.choices(filtered_moves,weights=weights1,k=1)
+        filtered_moves = random_move
+    else:
+        random.shuffle(filtered_moves)
     return filtered_moves
     
 def count_all_moves(board, player, rows, cols, score_cols):
@@ -542,10 +549,6 @@ def eval_pieces_in_goal(board,player,rows,cols,score_cols):
         
     if cnt == 4:
         score +=1
-        for x in score_cols:
-            piece  = board[goal_row][x]
-            if piece.side == "stone":
-                score+=1
     return score
     
     
@@ -608,7 +611,6 @@ def eval_dist_to_goal_cols(board,player,rows,cols,score_cols):
 def eval_piece_near_river(board: List[List[Any]], player, row, col):
     # Number of my pieces adjacent to a river
     score = 0
-
     for i in range(row):
         for j in range(col):
             piece = board[i][j]
@@ -1024,9 +1026,9 @@ def minimax_move(
         success, result = simulate_move(board, move, player, rows, cols, score_cols)
         if success:
             child_board = result
-            childVal = minValue(
+            childVal = maxValue(
                 child_board,
-                opponent,  # Next player (minimizing)
+                player,  # Next player (minimizing)
                 player,  # Original player (for evaluation)
                 rows,
                 cols,
@@ -1125,9 +1127,9 @@ def maxValue(
             board, move, current_player, rows, cols, score_cols
         )
         if success:
-            childVal = minValue(
+            childVal = maxValue(
                 child_board,
-                opponent,  # Next player (minimizing)
+                current_player,  # Next player (minimizing)
                 original_player,  # Keep original player
                 rows,
                 cols,
