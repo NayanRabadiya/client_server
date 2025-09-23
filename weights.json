@@ -1,8 +1,8 @@
 {
-  "all_piece_in_goal":200,
-  "stone_goal": 200,
+  "all_piece_in_goal":500,
+  "stone_goal": 500,
   "opp_stone_goal": -100,
-  "river_goal": 100,
+  "river_goal": 400,
   "opp_river_goal": -75,
 
   "manh_dist": -60,
@@ -15,7 +15,7 @@
 
   "near_river": 5,
   "opp_near_river": -2,
-  "move_count": 3,
+  "move_count": 2,
   "opp_move_count": -1,
 
   "goal_side_dist_row_moves":-12,

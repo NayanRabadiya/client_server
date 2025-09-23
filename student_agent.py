@@ -152,10 +152,11 @@ def score_move(move, board, player, rows, cols, score_cols):
 
     if move["action"] == "move":
         score += 10 if in_goal_side_rows(fx,fy,player,rows,cols,score_cols) else 0
+        
         score += 2 if fx in score_cols else 0
         sx,sy = move["from"]
         if is_own_score_cell(fx, fy, player, rows, cols, score_cols) and not is_own_score_cell(sx,sy,player,rows,cols,score_cols):
-            score += 50
+            score += 10
 
 
     # 4. For pushes: increase opponent distance from goal

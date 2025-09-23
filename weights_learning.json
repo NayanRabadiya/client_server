@@ -1,23 +1,26 @@
 {
-  "all_piece_in_goal": 200.0,
-  "stone_goal": 200.04,
-  "opp_stone_goal": -99.99,
-  "river_goal": 100.0,
-  "opp_river_goal": -74.59999999999994,
+  "all_piece_in_goal":200,
+  "stone_goal": 500,
+  "opp_stone_goal": -100,
+  "river_goal": 250,
+  "opp_river_goal": -75,
+
   "manh_dist": -60,
   "opp_manh_dist": 5,
-  "row_dist": -26.139999999999976,
-  "opp_row_dist": 11.099999999999982,
-  "col_dist": -24.94,
-  "opp_col_dist": 10.62,
-  "near_river": 5.26,
-  "opp_near_river": -0.879999999999999,
 
-  "move_count": 3,
+  "row_dist": -25,
+  "opp_row_dist":10,
+  "col_dist":-25,
+  "opp_col_dist":10,
+
+  "near_river": 5,
+  "opp_near_river": -2,
+  "move_count": 2,
   "opp_move_count": -1,
 
-  "goal_side_dist_row_moves": -12,
-  "opp_goal_side_dist_row_moves": 5,
-  "goal_side_dist_col_moves": -4.54,
-  "opp_goal_side_dist_col_moves": 2.5
+  "goal_side_dist_row_moves":-12,
+  "opp_goal_side_dist_row_moves":5,
+  "goal_side_dist_col_moves":-5,
+  "opp_goal_side_dist_col_moves":2.5
+
 }
