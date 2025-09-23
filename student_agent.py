@@ -42,11 +42,18 @@ def in_bounds(x: int, y: int, rows: int, cols: int) -> bool:
     """Check if coordinates are within board boundaries."""
     return 0 <= x < cols and 0 <= y < rows
 
-def load_weights(file_path="weights.json"):
-    with open(file_path, "r") as f:
-        weights = json.load(f)
-    return weights
-
+def count_piece_in_goal(board,player,rows,cols,score_cols):
+    if player == "circle":
+        goal_row = top_score_row()
+    else: 
+        goal_row = bottom_score_row(rows)
+        
+    cnt = 0
+    for x in score_cols:
+        if board[goal_row][x] is not None:
+            cnt+=1
+    return cnt
+      
 
 # ==================== GAME UTILITIES ====================
 # Essential utility functions for game state analysis
@@ -101,7 +108,14 @@ def distance_to_goal(x, y, player, rows, cols, score_cols):
     # Manhattan distance to nearest scoring cell
     return min(abs(y - goal_y) + abs(x - col) for col in score_cols)
 
-
+def get_goal_side_rows(player,rows,cols,score_cols):
+    # 5 rows
+    if player== "circle":
+        return range(0,4)
+    else:
+        return range(rows-5,rows-1)
+    
+    
 def in_goal_side_rows(
     fx,
     fy,
@@ -112,13 +126,13 @@ def in_goal_side_rows(
 ):
     """
     Check if exit (fx, fy) is in the 'goal side rows' rows/cols near the score area.
-    band = how wide the band is (2 means last 2 columns).
     """
-    offset = 2
+    
+    # goal side 5 rows
     if player == "circle":  # suppose Player 1 scores at right
-        return fx <= offset + 2
+        return fx <= 4
     else:  # Player 2 scores at left
-        return fx >= rows - 3 - offset
+        return fx >= rows - 5
 
 
 def has_adjacent_river(board, x, y, rows, cols):
@@ -137,10 +151,12 @@ def score_move(move, board, player, rows, cols, score_cols):
     score = 0
 
     if move["action"] == "move":
-        score -= distance_to_goal(fx, fy, player, rows, cols, score_cols)
+        score += 10 if in_goal_side_rows(fx,fy,player,rows,cols,score_cols) else 0
+        score += 2 if fx in score_cols else 0
         sx,sy = move["from"]
         if is_own_score_cell(fx, fy, player, rows, cols, score_cols) and not is_own_score_cell(sx,sy,player,rows,cols,score_cols):
             score += 50
+
 
     # 4. For pushes: increase opponent distance from goal
     opponent = get_opponent(player)
@@ -157,14 +173,13 @@ def score_move(move, board, player, rows, cols, score_cols):
 def score_flow_move(move, board, player, rows, cols, score_cols):
     x, y = move["from"]
     piece = board[y][x]
-    score =0
+    score = 0
     
     # Save original state
     original_side = piece.side
     original_orientation = getattr(piece, "orientation", None)
     
     
-
     # Temporarily apply the move
     if move["action"] == "flip":
         if is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="river" :
@@ -197,17 +212,27 @@ def score_flow_move(move, board, player, rows, cols, score_cols):
         for fx, fy in flow_cells
         if not is_opponent_score_cell(fx, fy, player, rows, cols, score_cols)
     ]
+    
+    goal_side_flow = [
+        (fx,fy)
+        for fx,fy in safe_flow
+        if in_goal_side_rows(fx,fy,player,rows,cols,score_cols)
+    ]
+    
+    in_goal_flow = [
+        (fx,fy)
+        for fx,fy in safe_flow
+        if is_own_score_cell(fx,fy,player,rows,cols,score_cols)
+    ]
 
     # Base score = number of safe flow cells
     score += len(safe_flow)
-
-    # Bonus if flow reaches own scoring area
-    if any(is_own_score_cell(fx, fy, player, rows, cols, score_cols) for fx, fy in safe_flow):
-        score += 5
+    score += len(goal_side_flow) # bonus for goal side flow
+    score += len(in_goal_flow) *5 # bonus for flow in goal
 
     # Bonus for connecting to existing rivers
-    if move["action"] in ("flip", "rotate") and piece.side == "river" and has_adjacent_river(board, x, y, rows, cols):
-        score += 2
+    # if move["action"] in ("flip", "rotate") and piece.side == "river" and has_adjacent_river(board, x, y, rows, cols):
+    #     score += 2
 
     # Revert piece to original state
     piece.side = original_side
@@ -443,19 +468,30 @@ def generate_all_moves(
 
 
 def generate_heuristic_moves(board, player, rows, cols, score_cols):
+    no_of_piece_in_goal = count_piece_in_goal(board,player,rows,cols,score_cols)
     moves = generate_all_moves(board, player, rows, cols, score_cols)
     
-    river_moves = [m for m in moves if m["action"] in ("flip", "rotate")]
-    river_moves = sorted(river_moves, key=lambda m: score_flow_move(m, board, player, rows, cols, score_cols), reverse=True)
-    river_moves = river_moves[:8]
+    filtered_moves = []
+    if no_of_piece_in_goal == 4:
+        for move in moves:
+            if move['action'] == "flip" :  
+                sx,sy = move["from"]
+                piece = board[sy][sx]
+                if piece.side == "river" and is_own_score_cell(sx,sy,player,rows,cols,score_cols):
+                    filtered_moves.append(move)             
+        
+    else:
+        river_moves = [m for m in moves if m["action"] in ("flip", "rotate")]
+        river_moves = sorted(river_moves, key=lambda m: score_flow_move(m, board, player, rows, cols, score_cols), reverse=True)
+        river_moves = river_moves[:6]
 
-    moves_with_to = [m for m in moves if m["action"] in ("push","move")]
-    moves_with_to = sorted(moves_with_to,key=lambda m: score_move(m, board, player, rows, cols, score_cols),reverse=True)
-    moves_with_to = moves_with_to[:17]
+        moves_with_to = [m for m in moves if m["action"] in ("push","move")]
+        moves_with_to = sorted(moves_with_to,key=lambda m: score_move(m, board, player, rows, cols, score_cols),reverse=True)
+        moves_with_to = moves_with_to[:14]
 
-    moves = river_moves + moves_with_to
+        filtered_moves = river_moves + moves_with_to
     
-    return moves
+    return filtered_moves
     
 def count_all_moves(board, player, rows, cols, score_cols):
     moves = generate_all_moves(board, player, rows, cols, score_cols)
@@ -495,21 +531,38 @@ def eval_river_in_goal(board: List[List[Any]], player, row, col, score_cols: Lis
             score += 1  # fixed bonus
     return score
 
+def eval_pieces_in_goal(board,player,rows,cols,score_cols):
+    cnt = count_piece_in_goal(board,player,rows,cols,score_cols)
+    score = 0
+    if player == "circle":
+        goal_row = top_score_row()
+    else:
+        goal_row = bottom_score_row(rows)
+        
+    if cnt == 4:
+        score +=1
+        for x in score_cols:
+            piece  = board[goal_row][x]
+            if piece.side == "stone":
+                score+=1
+    return score
+    
+    
 
 def eval_manhattan_dist(
-    board: List[List[Any]], player, row, col, score_cols: List[Any]
+    board: List[List[Any]], player, rows, cols, score_cols: List[Any]
 ):
     # Manhattan distance between my pieces and the nearest EMPTY goal cell
     score = 0
     if player == "circle":
         scoreRow = top_score_row()
     else:
-        scoreRow = bottom_score_row(row)
+        scoreRow = bottom_score_row(rows)
 
     emptyGoals = [(scoreRow, gx) for gx in score_cols if board[scoreRow][gx] is None]
 
-    for i in range(row):
-        for j in range(col):
+    for i in range(rows):
+        for j in range(cols):
             piece = board[i][j]
             if piece and piece.owner == player and emptyGoals:
                 # Manhattan distance to the closest EMPTY goal
@@ -518,6 +571,38 @@ def eval_manhattan_dist(
     # print("manhatt:", score)
     return score
 
+
+def eval_dist_to_goal_row(board,player,rows,cols,score_cols):
+    if player == "circle":
+        goal_row = top_score_row()
+    else:
+        goal_row = bottom_score_row(rows)    
+    score = 0
+    for y in range(rows):
+        for x in range(cols):
+            piece = board[y][x]
+            if piece is not None:
+                score += abs(y-goal_row)
+    return score
+
+def eval_dist_to_goal_cols(board,player,rows,cols,score_cols):
+    goal_side_rows = get_goal_side_rows(player,rows,cols,score_cols)
+    if player=="circle" :
+        goal_row = top_score_row() 
+    else :
+        goal_row = bottom_score_row(rows)
+    score = 0
+    for y in range(rows):
+        for x in range(cols):
+            piece = board[y][x]
+            if piece is not None and y in goal_side_rows:
+                minS = 1000
+                for col in score_cols:
+                    if board[goal_row][col] is not None:
+                        minS = min(minS,abs(x-col))
+                if minS != 1000:
+                    score+=minS  
+    return score
 
 def eval_piece_near_river(board: List[List[Any]], player, row, col):
     # Number of my pieces adjacent to a river
@@ -556,13 +641,36 @@ def eval_river_cnt(board, player, rows, cols, score_cols):
                 score += 1
     return score
 
+def eval_moves_dist_to_goal_side_row(board,player,rows,cols,score_cols,moves):
+    goal_side_rows = get_goal_side_rows(player,rows,cols,score_cols)
+    score = 0
+    for move in moves:
+        if move["action"] == "move":
+            dx,dy = move["to"]
+            score+= min([abs(dy-row) for row in goal_side_rows])
+    return score
+
+def eval_moves_dist_to_goal_side_col(board,player,rows,cols,score_cols,moves):
+    goal_side_rows = get_goal_side_rows(player,rows,cols,score_cols)
+    score = 0
+    for move in moves:
+        if move["action"] == "move":
+            dx,dy = move["to"]
+            if dy in goal_side_rows:
+                score+=min([abs(dx-col) for col in score_cols])
+    return score
+
+
 
 def evaluate_simple(board, player, rows, cols, score_cols):
     """
     Combine all simple evaluation functions with given weights.
     """
-    weights = load_weights("weights.json")
+    weights = load_weights()
     opponent = get_opponent(player)
+    
+    
+    all_piece_in_goal=eval_pieces_in_goal(board,player,rows,cols,score_cols)
     
     stone_goal = eval_stone_in_goal(board, player, rows, cols, score_cols)
     opp_stone_goal = eval_stone_in_goal(board, opponent, rows, cols, score_cols)
@@ -570,26 +678,57 @@ def evaluate_simple(board, player, rows, cols, score_cols):
     river_goal = eval_river_in_goal(board, player, rows, cols, score_cols)
     opp_river_goal = eval_river_in_goal(board, opponent, rows, cols, score_cols)
 
-    manh_dist = eval_manhattan_dist(board, player, rows, cols, score_cols)
-    opp_manh_dist = eval_manhattan_dist(board, opponent, rows, cols, score_cols)
-
+    # manh_dist = eval_manhattan_dist(board, player, rows, cols, score_cols)
+    # opp_manh_dist = eval_manhattan_dist(board, opponent, rows, cols, score_cols)
+    
+    row_dist = eval_dist_to_goal_row(board, player, rows, cols, score_cols)
+    opp_row_dist = eval_dist_to_goal_row(board, opponent, rows, cols, score_cols)
+    
+    col_dist = eval_dist_to_goal_cols(board, player, rows, cols, score_cols)
+    opp_col_dist = eval_dist_to_goal_cols(board, opponent, rows, cols, score_cols)
+    
     near_river = eval_piece_near_river(board, player, rows, cols)
     opp_near_river = eval_piece_near_river(board, opponent, rows, cols)
 
-    move_count = eval_no_of_moves(board, player, rows, cols, score_cols)
-    opp_move_count = eval_no_of_moves(board, opponent, rows, cols, score_cols)
+    moves = generate_all_moves(board, player, rows, cols, score_cols)
+    opp_moves = generate_all_moves(board, opponent, rows, cols, score_cols)
+    
+    move_count = len(moves)
+    opp_move_count = len(opp_moves)
+    
+    goal_side_row_dist_moves = eval_moves_dist_to_goal_side_row(board,player,rows,cols,score_cols,moves) 
+    opp_goal_side_row_dist_moves = eval_moves_dist_to_goal_side_row(board,opponent,rows,cols,score_cols,opp_moves) 
+
+    goal_side_col_dist_moves = eval_moves_dist_to_goal_side_col(board,player,rows,cols,score_cols,moves) 
+    opp_goal_side_col_dist_moves = eval_moves_dist_to_goal_side_col(board,opponent,rows,cols,score_cols,opp_moves) 
+
+
 
     features ={
+        "all_piece_in_goal":all_piece_in_goal,
         "stone_goal": stone_goal,
         "opp_stone_goal": opp_stone_goal,
         "river_goal": river_goal,
         "opp_river_goal": opp_river_goal,
-        "manh_dist": manh_dist,
-        "opp_manh_dist": opp_manh_dist,
+        # "manh_dist": manh_dist,
+        # "opp_manh_dist": opp_manh_dist,
+        
+        "row_dist":row_dist,
+        "opp_row_dist":opp_row_dist,
+        "col_dist":col_dist,
+        "opp_col_dist":opp_col_dist,
+        
+        
+        
         "near_river": near_river,
         "opp_near_river": opp_near_river,
         "move_count": move_count,
         "opp_move_count": opp_move_count,
+        
+        "goal_side_dist_row_moves":goal_side_row_dist_moves,
+        "opp_goal_side_dist_row_moves":opp_goal_side_row_dist_moves,
+        "goal_side_dist_col_moves":goal_side_col_dist_moves,
+        "opp_goal_side_dist_col_moves":opp_goal_side_col_dist_moves
     }
 
     # player_river_cnt = eval_river_cnt(board,player,rows,cols,score_cols)
@@ -601,7 +740,6 @@ def evaluate_simple(board, player, rows, cols, score_cols):
    
     total = sum(weights[k] * features[k] for k in features)
     return total
-
 
 
 # ===================== simmulate for minimax
@@ -862,6 +1000,10 @@ def simulate_move(
     else:
         return False, message
 
+def load_weights(file_path="weights.json"):
+    with open(file_path, "r") as f:
+        weights = json.load(f)
+    return weights
 
 
 def minimax_move(
