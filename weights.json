@@ -1,5 +1,5 @@
 {
-  "all_piece_in_goal":4000,
+  "all_piece_in_goal":100000,
   "stone_goal": 700,
   "opp_stone_goal": -100,
   "river_goal": 500,

@@ -15,6 +15,7 @@ Implement the choose() method in the StudentAgent class to select optimal moves.
 You may add any helper methods and modify the evaluation function as needed.
 """
 
+from collections import deque
 import random
 import copy
 from typing import List, Dict, Any, Optional, Tuple
@@ -176,7 +177,7 @@ def score_move(move, board, player, rows, cols, score_cols):
             score += 10 
             
         if sx not in score_cols and fx in score_cols:
-            score += 2 
+            score += 1 
         sx,sy = move["from"]
         if not is_own_score_cell(sx,sy,player,rows,cols,score_cols) and is_own_score_cell(fx, fy, player, rows, cols, score_cols):
             score += 10
@@ -184,12 +185,15 @@ def score_move(move, board, player, rows, cols, score_cols):
     # 4. For pushes: increase opponent distance from goal
     opponent = get_opponent(player)
     if move["action"] == "push":
+        fx,fy = move["to"]
+        pushed_piece_owner = board[fy][fx].owner
+        
         dest_x, dest_y = move["pushed_to"]
-        score += distance_to_goal(dest_x, dest_y, opponent, rows, cols, score_cols)
+        if pushed_piece_owner == player:
+            score -= distance_to_goal(dest_x,dest_y,player,rows,cols,score_cols) * 0.1 
+        else:
+            score += distance_to_goal(dest_x, dest_y, opponent, rows, cols, score_cols) * 0.1
         # Prefer pushes to cells with no adjacent rivers
-        if not has_adjacent_river(board, dest_x, dest_y, rows, cols):
-            score += 10
-
     return score
 
 
@@ -206,9 +210,9 @@ def score_flow_move(move, board, player, rows, cols, score_cols):
     # Temporarily apply the move
     if move["action"] == "flip":
         if is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="river" :
-            score+=100
-        elif is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="stone":
-            score+=10
+            score +=100
+        # elif is_own_score_cell(x,y,player,rows,cols,score_cols) and piece.side =="stone":
+        #     score +=1
         piece.side = "river" if piece.side == "stone" else "stone"
         
     elif move["action"] == "rotate":
@@ -340,7 +344,6 @@ def get_river_flow_destinations(
     Returns:
         List of unique (x, y) coordinates where the piece can end up
     """
-    from collections import deque
 
     destinations = set()
     visited = set()
@@ -1319,9 +1322,4 @@ def test_student_agent():
 if __name__ == "__main__":
     # Run basic test when file is executed directly
     test_student_agent()
-<<<<<<< HEAD
-    
-    
-# this is old
-=======
->>>>>>> ef2189845ac60eb179bcb5f852c2361073c051ec
+
