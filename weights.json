@@ -1,5 +1,5 @@
 {
-  "all_piece_in_goal":1000,
+  "all_piece_in_goal":4000,
   "stone_goal": 700,
   "opp_stone_goal": -100,
   "river_goal": 500,
@@ -8,19 +8,19 @@
   "manh_dist": -60,
   "opp_manh_dist": 5,
 
-  "row_dist": -10,
+  "row_dist": -15,
   "opp_row_dist":5,
-  "col_dist":-10,
+  "col_dist":-15,
   "opp_col_dist":5,
 
   "near_river": 15,
   "opp_near_river": -5,
-  "move_count": 5,
-  "opp_move_count": -2,
+  "move_count": 3,
+  "opp_move_count": -1,
 
-  "goal_side_dist_row_moves":-5,
-  "opp_goal_side_dist_row_moves":1.5,
-  "goal_side_dist_col_moves":-2.5,
-  "opp_goal_side_dist_col_moves":1
+  "goal_side_dist_row_moves":-10,
+  "opp_goal_side_dist_row_moves":1,
+  "goal_side_dist_col_moves":-5,
+  "opp_goal_side_dist_col_moves":0.5
 
 }

@@ -484,13 +484,22 @@ def generate_heuristic_moves(board, player, rows, cols, score_cols):
         river_moves = [m for m in moves if m["action"] in ("flip", "rotate")]
         river_moves = sorted(river_moves, key=lambda m: score_flow_move(m, board, player, rows, cols, score_cols), reverse=True)
         river_moves = river_moves[:10]
+        weights1 = [score_flow_move(m, board, player, rows, cols, score_cols) for m in river_moves]  
 
         moves_with_to = [m for m in moves if m["action"] in ("push","move")]
         moves_with_to = sorted(moves_with_to,key=lambda m: score_move(m, board, player, rows, cols, score_cols),reverse=True)
-        moves_with_to = moves_with_to[:20]
+        moves_with_to = moves_with_to[:30]
+        weights2 = [score_move(m, board, player, rows, cols, score_cols) for m in moves_with_to] 
 
         filtered_moves = river_moves + moves_with_to
-    
+        weights1.extend(weights2)
+        
+        if random.random() < 0.1 and  filtered_moves:
+           idx = random.randrange(len(filtered_moves))
+        #    random_move = random.choices(filtered_moves,weights=weights1,k=1)
+           filtered_moves.pop(idx)
+        else:
+            random.shuffle(filtered_moves)
     return filtered_moves
     
 def count_all_moves(board, player, rows, cols, score_cols):
@@ -749,63 +758,74 @@ def compute_valid_targets(
     cols: int,
     score_cols: List[int],
 ) -> Dict[str, Any]:
-    
-    
     if not in_bounds(sx, sy, rows, cols):
         return {"moves": set(), "pushes": []}
+
     p = board[sy][sx]
     if p is None or p.owner != player:
         return {"moves": set(), "pushes": []}
+
     moves = set()
     pushes = []
     dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
     for dx, dy in dirs:
         tx, ty = sx + dx, sy + dy
         if not in_bounds(tx, ty, rows, cols):
             continue
+
         # block entering opponent score cell
         if is_opponent_score_cell(tx, ty, player, rows, cols, score_cols):
             continue
-        target = board[ty][tx]
-        if target is None:
+
+        target_piece = board[ty][tx]
+
+        if target_piece is None:
+            # Normal move
             moves.add((tx, ty))
-        elif target.side == "river":
+
+        elif target_piece.side == "river":
+            # Cannot push rivers; compute river flow for moves
             flow = get_river_flow_destinations(
                 board, tx, ty, sx, sy, player, rows, cols, score_cols
             )
-            for d in flow:
-                moves.add(d)
-        else:
-            # stone occupied
+            for fx, fy in flow:
+                moves.add((fx, fy))
+
+        elif target_piece.side == "stone":
+            # Handle push logic
             if p.side == "stone":
+                # Stone pushes stone: next cell in same direction must be empty
                 px, py = tx + dx, ty + dy
                 if (
                     in_bounds(px, py, rows, cols)
                     and board[py][px] is None
-                    and not is_opponent_score_cell(
-                        px, py, p.owner, rows, cols, score_cols
-                    )
+                    and not is_opponent_score_cell(px, py, target_piece.owner, rows, cols, score_cols)
                 ):
                     pushes.append(((tx, ty), (px, py)))
-            else:
-                pushed_player = target.owner
+
+            elif p.side == "river":
+                # River pushes stone: simulate river replacing stone
+                original_piece = board[ty][tx]
+                board[ty][tx] = p  # temporarily place river
                 flow = get_river_flow_destinations(
                     board,
-                    tx,
-                    ty,
-                    sx,
-                    sy,
-                    pushed_player,
-                    rows,
-                    cols,
+                    tx, ty,
+                    sx, sy,  # original river position
+                    original_piece.owner,
+                    rows, cols,
                     score_cols,
-                    river_push=True,
+                    river_push=True
                 )
-                for d in flow:
-                    if not is_opponent_score_cell(
-                        d[0], d[1], player, rows, cols, score_cols
-                    ):
-                        pushes.append(((tx, ty), (d[0], d[1])))
+                board[ty][tx] = original_piece  # restore stone
+
+                for fx, fy in flow:
+                    # Cannot move back to original river position
+                    if (fx, fy) == (sx, sy):
+                        continue
+                    if not is_opponent_score_cell(fx, fy, original_piece.owner, rows, cols, score_cols):
+                        pushes.append(((tx, ty), (fx, fy)))
+
     return {"moves": moves, "pushes": pushes}
 
 
@@ -1069,7 +1089,7 @@ def game_over(board, rows, score_cols):
 
 
 def update_weights(
-    curr_features: dict, backed_features: dict, learn_rate: float = 0.02
+    curr_features: dict, backed_features: dict, learn_rate: float = 0.01
 ):
     """
     Update evaluation weights based on difference between current features and backed-up features.
@@ -1087,7 +1107,8 @@ def update_weights(
     # Update weights
     for k in curr_features:
         delta = backed_features[k] - curr_features[k]
-        weights[k] += learn_rate * delta
+        normalized_delta = delta / max(abs(weights[k]), 1e-6)
+        weights[k] += learn_rate * normalized_delta
 
     # Save updated weights
     with open("weights_learning.json", "w") as f:

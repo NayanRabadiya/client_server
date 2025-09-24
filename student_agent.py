@@ -54,6 +54,24 @@ def count_piece_in_goal(board,player,rows,cols,score_cols):
             cnt+=1
     return cnt
       
+def game_over(board, rows, score_cols):
+    row1 = top_score_row()
+    row2 = bottom_score_row(rows)
+    cnt1 = 0
+    cnt2 = 0
+    for col in score_cols:
+        piece1 = board[row1][col]
+        if piece1 is not None and piece1.side == "stone":
+            cnt1 += 1
+
+        piece2 = board[row2][col]
+        if piece2 is not None and piece2.side == "stone":
+            cnt2 += 1
+
+    if cnt1 == 4 or cnt2 == 4:
+        return True
+
+    return False
 
 # ==================== GAME UTILITIES ====================
 # Essential utility functions for game state analysis
@@ -148,14 +166,18 @@ def has_adjacent_river(board, x, y, rows, cols):
 
 def score_move(move, board, player, rows, cols, score_cols):
     fx, fy = move["to"]
+    sx, sy = move["from"]
     score = 0
 
     if move["action"] == "move":
-        score += 10 if in_goal_side_rows(fx,fy,player,rows,cols,score_cols) else 0
         
-        score += 2 if fx in score_cols else 0
+        if not in_goal_side_rows(sx,sy,player,rows,cols,score_cols) and  in_goal_side_rows(fx,fy,player,rows,cols,score_cols):
+            score += 10 
+            
+        if sx not in score_cols and fx in score_cols:
+            score += 2 
         sx,sy = move["from"]
-        if is_own_score_cell(fx, fy, player, rows, cols, score_cols) and not is_own_score_cell(sx,sy,player,rows,cols,score_cols):
+        if not is_own_score_cell(sx,sy,player,rows,cols,score_cols) and is_own_score_cell(fx, fy, player, rows, cols, score_cols):
             score += 10
         
     # 4. For pushes: increase opponent distance from goal
@@ -494,11 +516,12 @@ def generate_heuristic_moves(board, player, rows, cols, score_cols):
         filtered_moves = river_moves + moves_with_to
         weights1.extend(weights2)
         
-    if random.random() < 0.2 and  filtered_moves:
-        random_move = random.choices(filtered_moves,weights=weights1,k=1)
-        filtered_moves = random_move
-    else:
-        random.shuffle(filtered_moves)
+        if random.random() < 0.1 and  filtered_moves:
+           idx = random.randrange(len(filtered_moves))
+        #    random_move = random.choices(filtered_moves,weights=weights1,k=1)
+           filtered_moves.pop(idx)
+        else:
+            random.shuffle(filtered_moves)
     return filtered_moves
     
 def count_all_moves(board, player, rows, cols, score_cols):
@@ -696,8 +719,8 @@ def evaluate_simple(board, player, rows, cols, score_cols):
     moves = generate_all_moves(board, player, rows, cols, score_cols)
     opp_moves = generate_all_moves(board, opponent, rows, cols, score_cols)
     
-    move_count = len(moves)
-    opp_move_count = len(opp_moves)
+    # move_count = len(moves)
+    # opp_move_count = len(opp_moves)
     
     goal_side_row_dist_moves = eval_moves_dist_to_goal_side_row(board,player,rows,cols,score_cols,moves) 
     opp_goal_side_row_dist_moves = eval_moves_dist_to_goal_side_row(board,opponent,rows,cols,score_cols,opp_moves) 
@@ -725,8 +748,8 @@ def evaluate_simple(board, player, rows, cols, score_cols):
         
         "near_river": near_river,
         "opp_near_river": opp_near_river,
-        "move_count": move_count,
-        "opp_move_count": opp_move_count,
+        # "move_count": move_count,
+        # "opp_move_count": opp_move_count,
         
         "goal_side_dist_row_moves":goal_side_row_dist_moves,
         "opp_goal_side_dist_row_moves":opp_goal_side_row_dist_moves,
@@ -748,41 +771,84 @@ def evaluate_simple(board, player, rows, cols, score_cols):
 # ===================== simmulate for minimax
 
 
-def compute_valid_targets(board:List[List[Optional[Piece]]],
-                          sx:int, sy:int, player:str,
-                          rows:int, cols:int, score_cols:List[int]) -> Dict[str,Any]:
-    if not in_bounds(sx,sy,rows,cols):
-        return {'moves': set(), 'pushes': []}
+def compute_valid_targets(
+    board: List[List[Optional[Piece]]],
+    sx: int,
+    sy: int,
+    player: str,
+    rows: int,
+    cols: int,
+    score_cols: List[int],
+) -> Dict[str, Any]:
+    if not in_bounds(sx, sy, rows, cols):
+        return {"moves": set(), "pushes": []}
+
     p = board[sy][sx]
     if p is None or p.owner != player:
-        return {'moves': set(), 'pushes': []}
-    moves=set(); pushes=[]
-    dirs=[(1,0),(-1,0),(0,1),(0,-1)]
-    for dx,dy in dirs:
-        tx,ty = sx+dx, sy+dy
-        if not in_bounds(tx,ty,rows,cols): continue
-        # block entering opponent score cell
-        if is_opponent_score_cell(tx,ty,player,rows,cols,score_cols):
+        return {"moves": set(), "pushes": []}
+
+    moves = set()
+    pushes = []
+    dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
+    for dx, dy in dirs:
+        tx, ty = sx + dx, sy + dy
+        if not in_bounds(tx, ty, rows, cols):
             continue
-        target = board[ty][tx]
-        if target is None:
-            moves.add((tx,ty))
-        elif target.side == "river":
-            flow = get_river_flow_destinations(board, tx, ty, sx, sy, player, rows, cols, score_cols)
-            for d in flow: moves.add(d)
-        else:
-            # stone occupied
+
+        # block entering opponent score cell
+        if is_opponent_score_cell(tx, ty, player, rows, cols, score_cols):
+            continue
+
+        target_piece = board[ty][tx]
+
+        if target_piece is None:
+            # Normal move
+            moves.add((tx, ty))
+
+        elif target_piece.side == "river":
+            # Cannot push rivers; compute river flow for moves
+            flow = get_river_flow_destinations(
+                board, tx, ty, sx, sy, player, rows, cols, score_cols
+            )
+            for fx, fy in flow:
+                moves.add((fx, fy))
+
+        elif target_piece.side == "stone":
+            # Handle push logic
             if p.side == "stone":
-                px,py = tx+dx, ty+dy
-                if in_bounds(px,py,rows,cols) and board[py][px] is None and not is_opponent_score_cell(px,py,p.owner,rows,cols,score_cols):
-                    pushes.append(((tx,ty),(px,py)))
-            else:
-                pushed_player = target.owner
-                flow = get_river_flow_destinations(board, tx, ty, sx, sy, pushed_player, rows, cols, score_cols, river_push=True)
-                for d in flow:
-                    if not is_opponent_score_cell(d[0],d[1],player,rows,cols,score_cols):
-                        pushes.append(((tx,ty),(d[0],d[1])))
-    return {'moves': moves, 'pushes': pushes}
+                # Stone pushes stone: next cell in same direction must be empty
+                px, py = tx + dx, ty + dy
+                if (
+                    in_bounds(px, py, rows, cols)
+                    and board[py][px] is None
+                    and not is_opponent_score_cell(px, py, target_piece.owner, rows, cols, score_cols)
+                ):
+                    pushes.append(((tx, ty), (px, py)))
+
+            elif p.side == "river":
+                # River pushes stone: simulate river replacing stone
+                original_piece = board[ty][tx]
+                board[ty][tx] = p  # temporarily place river
+                flow = get_river_flow_destinations(
+                    board,
+                    tx, ty,
+                    sx, sy,  # original river position
+                    original_piece.owner,
+                    rows, cols,
+                    score_cols,
+                    river_push=True
+                )
+                board[ty][tx] = original_piece  # restore stone
+
+                for fx, fy in flow:
+                    # Cannot move back to original river position
+                    if (fx, fy) == (sx, sy):
+                        continue
+                    if not is_opponent_score_cell(fx, fy, original_piece.owner, rows, cols, score_cols):
+                        pushes.append(((tx, ty), (fx, fy)))
+
+    return {"moves": moves, "pushes": pushes}
 
 
 def validate_and_apply_move(
@@ -1061,7 +1127,7 @@ def minValue(
     beta: float,
     ply: int,
 ) -> float:
-    if ply == 0:
+    if ply == 0 or game_over(board,rows,score_cols):
         return evaluate_simple(board, original_player, rows, cols, score_cols)
 
     # GENERATE moves for the CURRENT player (minimizing)
@@ -1110,7 +1176,7 @@ def maxValue(
     beta: float,
     ply: int,
 ) -> float:
-    if ply == 0:
+    if ply == 0 or game_over(board,rows,score_cols):
         return evaluate_simple(board, original_player, rows, cols, score_cols)
 
     # GENERATE moves for the CURRENT player (maximizing)
@@ -1252,3 +1318,6 @@ def test_student_agent():
 if __name__ == "__main__":
     # Run basic test when file is executed directly
     test_student_agent()
+    
+    
+# this is old
