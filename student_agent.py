@@ -45,7 +45,7 @@ def in_bounds(x: int, y: int, rows: int, cols: int) -> bool:
 def count_piece_in_goal(board,player,rows,cols,score_cols):
     if player == "circle":
         goal_row = top_score_row()
-    else: 
+    else:  
         goal_row = bottom_score_row(rows)
         
     cnt = 0
@@ -75,7 +75,7 @@ def game_over(board, rows, score_cols):
 
 # ==================== GAME UTILITIES ====================
 # Essential utility functions for game state analysis
-def eval_hardcode(board, player, rows, cols, score_cols):
+def eval_hardcode(board : List[List[Optional["Piece"]]], player : str, rows: int, cols : int, score_cols: List[int]) -> int: 
     score = 0
     if player == "circle":
         target1 = [(rows - 3, 3), (rows - 3, 8)]
@@ -153,7 +153,7 @@ def in_goal_side_rows(
         return fx >= rows - 5 
 
 
-def has_adjacent_river(board, x, y, rows, cols):
+def has_adjacent_river(board, x, y, rows, cols)->bool:
     directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
     for dx, dy in directions:
         nx, ny = x + dx, y + dy
@@ -161,6 +161,7 @@ def has_adjacent_river(board, x, y, rows, cols):
             neighbor = board[ny][nx]
             if neighbor and neighbor.side == "river":
                 return True
+
     return False
 
 
@@ -248,7 +249,7 @@ def score_flow_move(move, board, player, rows, cols, score_cols):
     ]
 
     # Base score = number of safe flow cells
-    score += len(safe_flow)
+    # score += len(safe_flow)
     score += len(goal_side_flow) # bonus for goal side flow
     score += len(in_goal_flow) *5 # bonus for flow in goal
 
@@ -1318,6 +1319,9 @@ def test_student_agent():
 if __name__ == "__main__":
     # Run basic test when file is executed directly
     test_student_agent()
+<<<<<<< HEAD
     
     
 # this is old
+=======
+>>>>>>> ef2189845ac60eb179bcb5f852c2361073c051ec
